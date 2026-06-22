@@ -640,7 +640,7 @@ function showPage(p){
   if(p==='stats')renderStats();
 }
 
-/* Busca de capa via Open Library API (gratuita, sem chave, sem limite agressivo) */
+/* Busca de capa via Open Library API (com proxy CORS de apoio) */
 async function searchPoster(){
   const title=document.getElementById('f-title').value.trim();
   const author=document.getElementById('f-author').value.trim();
@@ -650,51 +650,59 @@ async function searchPoster(){
 
   let results=[];
 
-  // Tentativa 1: Open Library (título + autor, depois só título)
   const tentativasOL=[];
   if(author)tentativasOL.push(`title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}`);
   tentativasOL.push(`title=${encodeURIComponent(title)}`);
   tentativasOL.push(`q=${encodeURIComponent(title)}`);
 
+  const wrapWithProxy=url=>`https://corsproxy.io/?${encodeURIComponent(url)}`;
+
   for(const params of tentativasOL){
     if(results.length)break;
-    try{
-      const url=`https://openlibrary.org/search.json?${params}&limit=8`;
-      const r=await fetch(url);
-      if(!r.ok)continue;
-      const d=await r.json();
-      const docs=d.docs||[];
-      const filtrado=docs.filter(x=>x.cover_i).slice(0,6).map(x=>({
-        img:`https://covers.openlibrary.org/b/id/${x.cover_i}-L.jpg`,
-        year:x.first_publish_year||'',
-        author:(x.author_name&&x.author_name[0])||'',
-        pages:x.number_of_pages_median||''
-      }));
-      if(filtrado.length)results=filtrado;
-    }catch(e){continue;}
+    const baseUrl=`https://openlibrary.org/search.json?${params}&limit=8`;
+    // tenta direto, depois via proxy
+    for(const url of [baseUrl, wrapWithProxy(baseUrl)]){
+      if(results.length)break;
+      try{
+        const r=await fetch(url);
+        if(!r.ok)continue;
+        const d=await r.json();
+        const docs=d.docs||[];
+        const filtrado=docs.filter(x=>x.cover_i).slice(0,6).map(x=>({
+          img:`https://covers.openlibrary.org/b/id/${x.cover_i}-L.jpg`,
+          year:x.first_publish_year||'',
+          author:(x.author_name&&x.author_name[0])||'',
+          pages:x.number_of_pages_median||''
+        }));
+        if(filtrado.length)results=filtrado;
+      }catch(e){continue;}
+    }
   }
 
-  // Tentativa 2 (fallback): Google Books, caso Open Library não ache nada
+  // Fallback: Google Books (direto, depois via proxy)
   if(!results.length){
     const tentativasGB=[];
     if(author)tentativasGB.push(`intitle:${title} inauthor:${author}`);
     tentativasGB.push(`intitle:${title}`);
     for(const q of tentativasGB){
       if(results.length)break;
-      try{
-        const url=`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8`;
-        const r=await fetch(url);
-        if(!r.ok)continue;
-        const d=await r.json();
-        const raw=d.items||[];
-        const filtrado=raw.filter(x=>x.volumeInfo?.imageLinks?.thumbnail).slice(0,6).map(x=>({
-          img:(x.volumeInfo.imageLinks.thumbnail||'').replace('http:','https:'),
-          year:(x.volumeInfo.publishedDate||'').slice(0,4),
-          author:(x.volumeInfo.authors&&x.volumeInfo.authors[0])||'',
-          pages:x.volumeInfo.pageCount||''
-        }));
-        if(filtrado.length)results=filtrado;
-      }catch(e){continue;}
+      const baseUrl=`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8`;
+      for(const url of [baseUrl, wrapWithProxy(baseUrl)]){
+        if(results.length)break;
+        try{
+          const r=await fetch(url);
+          if(!r.ok)continue;
+          const d=await r.json();
+          const raw=d.items||[];
+          const filtrado=raw.filter(x=>x.volumeInfo?.imageLinks?.thumbnail).slice(0,6).map(x=>({
+            img:(x.volumeInfo.imageLinks.thumbnail||'').replace('http:','https:'),
+            year:(x.volumeInfo.publishedDate||'').slice(0,4),
+            author:(x.volumeInfo.authors&&x.volumeInfo.authors[0])||'',
+            pages:x.volumeInfo.pageCount||''
+          }));
+          if(filtrado.length)results=filtrado;
+        }catch(e){continue;}
+      }
     }
   }
 
