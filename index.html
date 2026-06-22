@@ -647,34 +647,51 @@ async function searchPoster(){
   document.getElementById('poster-status').textContent='🔍 Buscando capa...';
   document.getElementById('poster-options').innerHTML='';
 
-  let query=`intitle:${title}`;
-  if(author)query+=`+inauthor:${author}`;
-  const url=`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=6`;
+  // Tenta várias queries, da mais específica à mais simples
+  const tentativas=[];
+  if(author)tentativas.push(`intitle:${title} inauthor:${author}`);
+  tentativas.push(`intitle:${title}`);
+  tentativas.push(title);
 
-  try{
-    const r=await fetch(url);
-    const d=await r.json();
-    const raw=d.items||[];
-    const results=raw.filter(x=>x.volumeInfo?.imageLinks?.thumbnail).slice(0,6);
-    if(!results.length){
-      document.getElementById('poster-status').textContent='❌ Capa não encontrada. Tente sem o autor ou em inglês.';
-      return;
-    }
-    document.getElementById('poster-status').textContent=`✅ ${results.length} capa(s) encontrada(s) — escolha uma:`;
-    document.getElementById('poster-options').innerHTML=results.map((x,i)=>{
-      const img=(x.volumeInfo.imageLinks.thumbnail||'').replace('http:','https:');
-      return `<div class="poster-opt${i===0?' selected':''}" onclick="selectPoster('${img}',this)"><img src="${img}" alt="" loading="lazy"></div>`;
-    }).join('');
-    const first=results[0];
-    const img=(first.volumeInfo.imageLinks.thumbnail||'').replace('http:','https:');
-    selectPosterUrl(img);
-    const yr=(first.volumeInfo.publishedDate||'').slice(0,4);
-    if(yr&&!document.getElementById('f-year').value)document.getElementById('f-year').value=yr;
-    if(first.volumeInfo.pageCount&&!document.getElementById('f-pages').value)document.getElementById('f-pages').value=first.volumeInfo.pageCount;
-    if(first.volumeInfo.authors&&!document.getElementById('f-author').value)document.getElementById('f-author').value=first.volumeInfo.authors[0];
-  }catch(e){
-    document.getElementById('poster-status').textContent='❌ Erro ao buscar. Verifique a conexão.';
+  let results=[];
+  let lastError=null;
+
+  for(const q of tentativas){
+    if(results.length)break;
+    try{
+      const url=`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=10`;
+      const r=await fetch(url);
+      if(!r.ok){lastError='http';continue;}
+      const d=await r.json();
+      const raw=d.items||[];
+      const filtrado=raw.filter(x=>x.volumeInfo?.imageLinks?.thumbnail||x.volumeInfo?.imageLinks?.smallThumbnail);
+      if(filtrado.length)results=filtrado.slice(0,6);
+    }catch(e){lastError=e;continue;}
   }
+
+  if(!results.length){
+    document.getElementById('poster-status').textContent='❌ Capa não encontrada. Tente o título em inglês ou mais simples.';
+    return;
+  }
+
+  const getImg=x=>{
+    const links=x.volumeInfo.imageLinks||{};
+    const raw=links.thumbnail||links.smallThumbnail||'';
+    return raw.replace('http:','https:').replace('zoom=1','zoom=2');
+  };
+
+  document.getElementById('poster-status').textContent=`✅ ${results.length} capa(s) encontrada(s) — escolha uma:`;
+  document.getElementById('poster-options').innerHTML=results.map((x,i)=>{
+    const img=getImg(x);
+    return `<div class="poster-opt${i===0?' selected':''}" onclick="selectPoster('${img}',this)"><img src="${img}" alt="" loading="lazy"></div>`;
+  }).join('');
+
+  const first=results[0];
+  selectPosterUrl(getImg(first));
+  const yr=(first.volumeInfo.publishedDate||'').slice(0,4);
+  if(yr&&!document.getElementById('f-year').value)document.getElementById('f-year').value=yr;
+  if(first.volumeInfo.pageCount&&!document.getElementById('f-pages').value)document.getElementById('f-pages').value=first.volumeInfo.pageCount;
+  if(first.volumeInfo.authors&&!document.getElementById('f-author').value)document.getElementById('f-author').value=first.volumeInfo.authors[0];
 }
 function selectPoster(url,el){
   document.querySelectorAll('.poster-opt').forEach(o=>o.classList.remove('selected'));
