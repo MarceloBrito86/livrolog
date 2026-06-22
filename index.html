@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="LivroLog">
@@ -639,7 +640,7 @@ function showPage(p){
   if(p==='stats')renderStats();
 }
 
-/* Busca de capa via Google Books API (gratuita, sem chave) */
+/* Busca de capa via Open Library API (gratuita, sem chave, sem limite agressivo) */
 async function searchPoster(){
   const title=document.getElementById('f-title').value.trim();
   const author=document.getElementById('f-author').value.trim();
@@ -647,26 +648,54 @@ async function searchPoster(){
   document.getElementById('poster-status').textContent='🔍 Buscando capa...';
   document.getElementById('poster-options').innerHTML='';
 
-  // Tenta várias queries, da mais específica à mais simples
-  const tentativas=[];
-  if(author)tentativas.push(`intitle:${title} inauthor:${author}`);
-  tentativas.push(`intitle:${title}`);
-  tentativas.push(title);
-
   let results=[];
-  let lastError=null;
 
-  for(const q of tentativas){
+  // Tentativa 1: Open Library (título + autor, depois só título)
+  const tentativasOL=[];
+  if(author)tentativasOL.push(`title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}`);
+  tentativasOL.push(`title=${encodeURIComponent(title)}`);
+  tentativasOL.push(`q=${encodeURIComponent(title)}`);
+
+  for(const params of tentativasOL){
     if(results.length)break;
     try{
-      const url=`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=10`;
+      const url=`https://openlibrary.org/search.json?${params}&limit=8`;
       const r=await fetch(url);
-      if(!r.ok){lastError='http';continue;}
+      if(!r.ok)continue;
       const d=await r.json();
-      const raw=d.items||[];
-      const filtrado=raw.filter(x=>x.volumeInfo?.imageLinks?.thumbnail||x.volumeInfo?.imageLinks?.smallThumbnail);
-      if(filtrado.length)results=filtrado.slice(0,6);
-    }catch(e){lastError=e;continue;}
+      const docs=d.docs||[];
+      const filtrado=docs.filter(x=>x.cover_i).slice(0,6).map(x=>({
+        img:`https://covers.openlibrary.org/b/id/${x.cover_i}-L.jpg`,
+        year:x.first_publish_year||'',
+        author:(x.author_name&&x.author_name[0])||'',
+        pages:x.number_of_pages_median||''
+      }));
+      if(filtrado.length)results=filtrado;
+    }catch(e){continue;}
+  }
+
+  // Tentativa 2 (fallback): Google Books, caso Open Library não ache nada
+  if(!results.length){
+    const tentativasGB=[];
+    if(author)tentativasGB.push(`intitle:${title} inauthor:${author}`);
+    tentativasGB.push(`intitle:${title}`);
+    for(const q of tentativasGB){
+      if(results.length)break;
+      try{
+        const url=`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8`;
+        const r=await fetch(url);
+        if(!r.ok)continue;
+        const d=await r.json();
+        const raw=d.items||[];
+        const filtrado=raw.filter(x=>x.volumeInfo?.imageLinks?.thumbnail).slice(0,6).map(x=>({
+          img:(x.volumeInfo.imageLinks.thumbnail||'').replace('http:','https:'),
+          year:(x.volumeInfo.publishedDate||'').slice(0,4),
+          author:(x.volumeInfo.authors&&x.volumeInfo.authors[0])||'',
+          pages:x.volumeInfo.pageCount||''
+        }));
+        if(filtrado.length)results=filtrado;
+      }catch(e){continue;}
+    }
   }
 
   if(!results.length){
@@ -674,24 +703,16 @@ async function searchPoster(){
     return;
   }
 
-  const getImg=x=>{
-    const links=x.volumeInfo.imageLinks||{};
-    const raw=links.thumbnail||links.smallThumbnail||'';
-    return raw.replace('http:','https:').replace('zoom=1','zoom=2');
-  };
-
   document.getElementById('poster-status').textContent=`✅ ${results.length} capa(s) encontrada(s) — escolha uma:`;
-  document.getElementById('poster-options').innerHTML=results.map((x,i)=>{
-    const img=getImg(x);
-    return `<div class="poster-opt${i===0?' selected':''}" onclick="selectPoster('${img}',this)"><img src="${img}" alt="" loading="lazy"></div>`;
-  }).join('');
+  document.getElementById('poster-options').innerHTML=results.map((x,i)=>
+    `<div class="poster-opt${i===0?' selected':''}" onclick="selectPoster('${x.img}',this)"><img src="${x.img}" alt="" loading="lazy"></div>`
+  ).join('');
 
   const first=results[0];
-  selectPosterUrl(getImg(first));
-  const yr=(first.volumeInfo.publishedDate||'').slice(0,4);
-  if(yr&&!document.getElementById('f-year').value)document.getElementById('f-year').value=yr;
-  if(first.volumeInfo.pageCount&&!document.getElementById('f-pages').value)document.getElementById('f-pages').value=first.volumeInfo.pageCount;
-  if(first.volumeInfo.authors&&!document.getElementById('f-author').value)document.getElementById('f-author').value=first.volumeInfo.authors[0];
+  selectPosterUrl(first.img);
+  if(first.year&&!document.getElementById('f-year').value)document.getElementById('f-year').value=first.year;
+  if(first.pages&&!document.getElementById('f-pages').value)document.getElementById('f-pages').value=first.pages;
+  if(first.author&&!document.getElementById('f-author').value)document.getElementById('f-author').value=first.author;
 }
 function selectPoster(url,el){
   document.querySelectorAll('.poster-opt').forEach(o=>o.classList.remove('selected'));
